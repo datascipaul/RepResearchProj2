@@ -1,0 +1,135 @@
+---
+title: "Reproducible Research Assignment 2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Summary
+This was written response to Course Project 2 of the Johns Hopkins/Coursera Reproducible Research Course.  It answers two questions:
+
+*  Across the US, which types of events are most harmful with respect to population health?: Tornadoes
+*  Across the US, which types of events have the greatest economic consequences?: Tornadoes
+
+This analysis relies on data provided by the U.S. National Oceanic Atmospheric Administration's (NOAA) storm database.
+
+## Requirements
+The code is this document was generated in RStudio.  It requires the knitr, ggplot2, dplyr, reshape2, and gridArrange packages.
+
+## Data Processing
+The data processing step begings by downloading the data from the website  provided in the assignment and reading it into R.  
+
+### Initial processing
+```{r}
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(gridExtra)
+```
+```{r, cache=TRUE}
+fileURL<-"https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+download.file(fileURL,destfile = "fstormdata.csv.bz2")
+stormdata<-read.csv("fstormdata.csv.bz2")
+```
+
+#### Data exploration to inform data processing.
+```{r}
+str(stormdata)
+```
+The data set is very large, composed of numeric and factor variables.  For basic analyses of human health and economic costs associated with different event types, the key variables are EVTYPE (events), FATALITIES, INJURIES, PROPDMG, PROPMGEXP (the cost of property damage incurred in significant digits, and a multiplier value, respectively), CROPDMG, and CROPDMGEXP (the costs of crop damage incurred in significant digs, and a multiplier value, respectively). 
+
+### Further processing
+The only processing required for analysis of human health is aggregation of the fatality and injury data (performed below).
+
+```{r}
+#create event table for question one
+by_event<- summarize(group_by(stormdata,EVTYPE),tot_fatalities=sum(FATALITIES), avg_fatalities=mean(FATALITIES), tot_injuries=sum(INJURIES), avg_injuries=mean(INJURIES))
+mby_event<-melt(by_event,id="EVTYPE")
+```
+
+In order to obtain comparable values for analysis of economic damage, the data on property and crop damage must be converted by their respective multipliers, and then combined into a single damage value variable.  The three values described in the NOAA codebook for these data are "k" for thousands, "m" for millions, and "b" for billions.  The actual data contain additional values, including various symbols and numbers.  However, their prevalence is low and even if included, would create such small values as to have minimal impact on analysis, so for this anlaysis I convert any data which has a multiplier on than that specified in the codebook to "NA".  
+```{r, cache=TRUE}
+# create data for second part of analysis
+# only calculate for data with multipliers for thousand, million, or billion; other values treated as NA (relatively small proportion of total)
+stormdata$propdmgcalc <- as.numeric(NA)
+stormdata$cropdmgcalc <- as.numeric(NA)
+for(i in 1:nrow(stormdata)){
+  if(stormdata$PROPDMGEXP[i]=="k" | stormdata$PROPDMGEXP[i]=="K"){
+    stormdata$propdmgcalc[i]<-stormdata$PROPDMG[i]*1000
+    #next
+    }
+  if(stormdata$PROPDMGEXP[i]=="m" | stormdata$PROPDMGEXP[i]=="M"){
+    stormdata$propdmgcalc[i]<-stormdata$PROPDMG[i]*1000000
+    #next
+    }
+  if(stormdata$PROPDMGEXP[i]=="b" | stormdata$PROPDMGEXP[i]=="B"){
+    stormdata$propdmgcalc[i]<-stormdata$PROPDMG[i]*1000000000
+    #next
+    }
+  if(stormdata$CROPDMGEXP[i]=="k" | stormdata$CROPDMGEXP[i]=="K"){
+    stormdata$cropdmgcalc[i]<-stormdata$CROPDMG[i]*1000
+    #next
+    }
+  if(stormdata$CROPDMGEXP[i]=="m" | stormdata$CROPDMGEXP[i]=="M"){
+    stormdata$cropdmgcalc[i]<-stormdata$CROPDMG[i]*1000000
+    #next
+    }
+  if(stormdata$CROPDMGEXP[i]=="b" | stormdata$CROPDMGEXP[i]=="B"){
+    stormdata$cropdmgcalc[i]<-stormdata$CROPDMG[i]*1000000000
+    #next
+    }
+}
+```
+
+### Analysis of and correction for outliers
+```{r}
+crop_explore<-qplot(REFNUM,cropdmgcalc,data=stormdata, main="Crop Damage by Event")
+prop_explore<-qplot(REFNUM,propdmgcalc,data=stormdata, main="Property Damage by Event")
+grid.arrange(prop_explore,crop_explore,ncol=2,top="Initial Inspection of Total Damage Values")
+```
+
+Initial exloration of the damage data shows outliers; both property damage and crop damage plots show values far exceeding the rest of the data based on initial visual inspection. In the case of the crop damage, the two detailed remarks (not shown for here for brevity) do not immediately indicate a data entry error, and so the outliers are left in the dataset.  However, for the property damage outlier, the remarkers indicate that the damage was in the millions, while the multiplier in the data is for billion.  
+```{r}
+outlier_refnum<-stormdata[which(stormdata$propdmgcalc==max(stormdata$propdmgcalc)),"REFNUM"]
+stormdata[which(stormdata$REFNUM==outlier_refnum),"REMARKS"]
+```
+
+Thus, I correct that field to "m" and update the calculated values for that result.
+```{r}
+stormdata[which(stormdata$REFNUM==outlier_refnum),"PROPDMGEXP"]<-"m"
+stormdata[which(stormdata$REFNUM==outlier_refnum),"propdmgcalc"]<-stormdata[which(stormdata$REFNUM==outlier_refnum),"PROPDMG"]*1000000
+```
+
+### Final Cleanup
+Those calculated costs are combined into a total cost variable for each event, and the data are then aggregated by event to form the data frame use in answering question two.
+```{r}
+byevent_costs<- summarise(group_by(stormdata,EVTYPE),tot_propcost=sum(propdmgcalc),avg_propcost=mean(propdmgcalc), tot_cropcost=sum(cropdmgcalc),avg_cropcost=mean(cropdmgcalc))
+byevent_costs$combcost_calc<-byevent_costs$tot_propcost+byevent_costs$tot_cropcost
+
+```
+## Results
+For simplicity, I choose to use total values across the history provided in the data set to determine threat to health and economic harm.  However, I also provide averages from all events in the data for comparison.
+
+### Question One - Population Health
+```{r}
+fatality_tabledata<-by_event %>% arrange(desc(tot_fatalities)) %>% head(n=10)
+fatalityplot<- qplot(EVTYPE,value,data=mby_event,color=variable, main="Distribution of Fatalities by Event")+theme(axis.text.x=element_blank())
+mytheme<-ttheme_default(base_size = 8)
+fatalitytable<-tableGrob(d=fatality_tabledata,theme=mytheme)
+grid.arrange(fatalityplot,fatalitytable,nrow=2)
+```
+
+Based on total deaths over time, the event category `r fatality_tabledata[which(fatality_tabledata$tot_fatalities==max(fatality_tabledata$tot_fatalities)),"EVTYPE"]` has posed the most harm to population health.
+
+### Question Two - Economic Consequences
+```{r}
+totalcost_tabledata<-byevent_costs %>% arrange(desc(combcost_calc)) %>% head(n=10)
+costplot<-qplot(EVTYPE, combcost_calc, data=byevent_costs, main="Distribution of Costs by Event")+ theme(axis.text.x=element_blank())
+mytheme<-ttheme_default(base_size = 8)
+costtable<-tableGrob(d=totalcost_tabledata, theme=mytheme)
+grid.arrange(costplot,costtable,nrow=2)
+```
+
+Based on total costs over time (both property and crop), the event category `r totalcost_tabledata[which(totalcost_tabledata$combcost_calc==max(totalcost_tabledata$combcost_calc)),"EVTYPE"]` has caused the greatest economic consequences. 
